@@ -12,7 +12,11 @@ var NOMBRES = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO',
                'JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
 
 function limpiarTexto_(txt) {
-  return txt.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+  var s = String(txt), r = '';
+  for (var i = 0; i < s.length; i++) {
+    r += s.charCodeAt(i) > 127 ? ' ' : s[i];
+  }
+  return r.replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
 function analizarSheet_(sheet) {
