@@ -3,7 +3,8 @@
 // ============================================
 // Pegar este script en cada planilla EXTERNA de vendedor.
 // Detecta automaticamente los meses y columnas.
-// Funciona en cualquier planilla sin configurar nada.
+// Solo congela el cuadro principal (izquierdo).
+// No toca cuadros a la derecha que tengan meses.
 // ============================================
 
 var MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -14,24 +15,46 @@ function limpiarTexto_(txt) {
   return txt.replace(/[  -​  　﻿]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
-function detectarGrupos_(sheet) {
+function analizarSheet_(sheet) {
   var lastRow = sheet.getLastRow();
   var lastCol = sheet.getLastColumn();
-  if (lastRow < 12 || lastCol < 1) return [];
-  var scanCols = Math.min(lastCol, 15);
+  if (lastRow < 12 || lastCol < 1) return {grupos: [], limiteCol: lastCol};
+  var scanCols = Math.min(lastCol, 20);
   var allValues = sheet.getRange(1, 1, lastRow, scanCols).getDisplayValues();
+  var monthsByCol = {};
   var monthRows = [];
   for (var r = 0; r < allValues.length; r++) {
+    var foundInRow = false;
     for (var c = 0; c < allValues[r].length; c++) {
       var val = limpiarTexto_(allValues[r][c]);
       var idx = NOMBRES.indexOf(val);
       if (idx >= 0) {
-        monthRows.push({row: r + 1, mes: idx});
-        break;
+        if (!monthsByCol[c]) monthsByCol[c] = 0;
+        monthsByCol[c]++;
+        if (!foundInRow) {
+          monthRows.push({row: r + 1, mes: idx});
+          foundInRow = true;
+        }
       }
     }
   }
-  if (monthRows.length < 12) return [];
+  if (monthRows.length < 12) return {grupos: [], limiteCol: lastCol};
+  var primaryCol = -1;
+  for (var r2 = 0; r2 < allValues.length; r2++) {
+    for (var c2 = 0; c2 < allValues[r2].length; c2++) {
+      var v2 = limpiarTexto_(allValues[r2][c2]);
+      if (NOMBRES.indexOf(v2) >= 0) { primaryCol = c2; break; }
+    }
+    if (primaryCol >= 0) break;
+  }
+  var limiteCol = lastCol;
+  var sortedCols = Object.keys(monthsByCol).map(Number).sort(function(a, b) { return a - b; });
+  for (var i = 0; i < sortedCols.length; i++) {
+    if (sortedCols[i] > primaryCol && monthsByCol[sortedCols[i]] >= 12) {
+      limiteCol = sortedCols[i];
+      break;
+    }
+  }
   var grupos = [];
   var used = {};
   for (var i = 0; i < monthRows.length; i++) {
@@ -54,7 +77,7 @@ function detectarGrupos_(sheet) {
       }
     }
   }
-  return grupos;
+  return {grupos: grupos, limiteCol: limiteCol};
 }
 
 function detectarAnio_(sheet, grupo) {
@@ -74,8 +97,8 @@ function detectarAnio_(sheet, grupo) {
   return null;
 }
 
-function congelarFila_(sheet, row, lastCol) {
-  var range = sheet.getRange(row, 1, 1, lastCol);
+function congelarFila_(sheet, row, limiteCol) {
+  var range = sheet.getRange(row, 1, 1, limiteCol);
   var values = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   var count = 0;
@@ -101,17 +124,17 @@ function congelarMes() {
 
   var sheets = ss.getSheets();
   sheets.forEach(function(sheet) {
-    var grupos = detectarGrupos_(sheet);
-    if (grupos.length === 0) return;
-    var lastCol = sheet.getLastColumn();
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
     var found = false;
-    log.push('=== Solapa: ' + sheet.getName() + ' (' + grupos.length + ' bloques) ===');
-    for (var g = 0; g < grupos.length; g++) {
-      var anio = detectarAnio_(sheet, grupos[g]);
+    var colLetra = String.fromCharCode(65 + info.limiteCol - 1);
+    log.push('=== Solapa: ' + sheet.getName() + ' (' + info.grupos.length + ' bloques, congela hasta col ' + colLetra + ') ===');
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
       if (anio !== anioC) continue;
       found = true;
-      var row = grupos[g][mesC];
-      var count = congelarFila_(sheet, row, lastCol);
+      var row = info.grupos[g][mesC];
+      var count = congelarFila_(sheet, row, info.limiteCol);
       log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anioC);
@@ -134,15 +157,15 @@ function vistaPrevia() {
 
   var sheets = ss.getSheets();
   sheets.forEach(function(sheet) {
-    var grupos = detectarGrupos_(sheet);
-    if (grupos.length === 0) return;
-    var lastCol = sheet.getLastColumn();
-    log.push('=== Solapa: ' + sheet.getName() + ' (' + grupos.length + ' bloques) ===');
-    for (var g = 0; g < grupos.length; g++) {
-      var anio = detectarAnio_(sheet, grupos[g]);
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
+    var colLetra = String.fromCharCode(65 + info.limiteCol - 1);
+    log.push('=== Solapa: ' + sheet.getName() + ' (' + info.grupos.length + ' bloques, congela hasta col ' + colLetra + ') ===');
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
       if (anio !== anioC) continue;
-      var row = grupos[g][mesC];
-      var range = sheet.getRange(row, 1, 1, lastCol);
+      var row = info.grupos[g][mesC];
+      var range = sheet.getRange(row, 1, 1, info.limiteCol);
       var formulas = range.getFormulas()[0];
       var values = range.getValues()[0];
       var conFormula = 0, conValor = 0;
@@ -159,57 +182,37 @@ function vistaPrevia() {
 
 function diagnostico() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var log = ['DIAGNOSTICO COMPLETO - ' + ss.getName(), ''];
+  var log = ['DIAGNOSTICO - ' + ss.getName(), ''];
   var sheets = ss.getSheets();
   sheets.forEach(function(sheet) {
     var lastRow = sheet.getLastRow();
     var lastCol = sheet.getLastColumn();
     if (lastRow < 5) return;
     log.push('=== ' + sheet.getName() + ' (' + lastRow + ' filas, ' + lastCol + ' col) ===');
-    var scanCols = Math.min(lastCol, 15);
+    var scanCols = Math.min(lastCol, 20);
     var allValues = sheet.getRange(1, 1, lastRow, scanCols).getDisplayValues();
     var mesesPorCol = {};
-    var encontrados = [];
     for (var r = 0; r < allValues.length; r++) {
       for (var c = 0; c < allValues[r].length; c++) {
         var val = limpiarTexto_(allValues[r][c]);
-        var idx = NOMBRES.indexOf(val);
-        if (idx >= 0) {
-          var colLetra = String.fromCharCode(65 + c);
-          if (!mesesPorCol[colLetra]) mesesPorCol[colLetra] = 0;
-          mesesPorCol[colLetra]++;
-          encontrados.push('  Fila ' + (r+1) + ' Col ' + colLetra + ': "' + allValues[r][c].trim() + '" = ' + NOMBRES[idx]);
-          break;
+        if (NOMBRES.indexOf(val) >= 0) {
+          var colL = String.fromCharCode(65 + c);
+          if (!mesesPorCol[colL]) mesesPorCol[colL] = {count: 0, primera: r + 1};
+          mesesPorCol[colL].count++;
         }
       }
     }
-    if (encontrados.length === 0) {
-      log.push('  NINGÚN mes encontrado en ninguna celda');
-      var muestra = [];
-      for (var r = 0; r < Math.min(5, allValues.length); r++) {
-        var fila = [];
-        for (var c = 0; c < Math.min(3, allValues[r].length); c++) {
-          fila.push(allValues[r][c].substring(0, 20));
-        }
-        muestra.push('  Fila ' + (r+1) + ': [' + fila.join(' | ') + ']');
-      }
-      log.push('  Primeras filas:');
-      log = log.concat(muestra);
-    } else {
-      for (var col in mesesPorCol) {
-        log.push('  Columna ' + col + ': ' + mesesPorCol[col] + ' meses');
-      }
-      log.push('  Total encontrados: ' + encontrados.length);
-      log.push('  Primeros 5:');
-      for (var i = 0; i < Math.min(5, encontrados.length); i++) {
-        log.push(encontrados[i]);
-      }
+    for (var col in mesesPorCol) {
+      log.push('Col ' + col + ': ' + mesesPorCol[col].count + ' meses (1ra fila: ' + mesesPorCol[col].primera + ')');
     }
-    var grupos = detectarGrupos_(sheet);
-    log.push('  Bloques armados: ' + grupos.length);
-    for (var g = 0; g < grupos.length; g++) {
-      var anio = detectarAnio_(sheet, grupos[g]);
-      log.push('    #' + (g+1) + ': filas ' + grupos[g][0] + '-' + grupos[g][11] + ' (anio: ' + (anio || '?') + ')');
+    var info = analizarSheet_(sheet);
+    log.push('Bloques: ' + info.grupos.length);
+    if (info.limiteCol < lastCol) {
+      log.push('Limite congelamiento: hasta col ' + String.fromCharCode(65 + info.limiteCol - 1) + ' (no toca cuadros a la derecha)');
+    }
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
+      log.push('  #' + (g + 1) + ': filas ' + info.grupos[g][0] + '-' + info.grupos[g][11] + ' (anio: ' + (anio || '?') + ')');
     }
     log.push('');
   });
@@ -229,17 +232,17 @@ function congelarMesEspecifico() {
 
   var sheets = ss.getSheets();
   sheets.forEach(function(sheet) {
-    var grupos = detectarGrupos_(sheet);
-    if (grupos.length === 0) return;
-    var lastCol = sheet.getLastColumn();
-    log.push('=== Solapa: ' + sheet.getName() + ' ===');
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
+    var colLetra = String.fromCharCode(65 + info.limiteCol - 1);
+    log.push('=== Solapa: ' + sheet.getName() + ' (hasta col ' + colLetra + ') ===');
     var found = false;
-    for (var g = 0; g < grupos.length; g++) {
-      var anioG = detectarAnio_(sheet, grupos[g]);
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anioG = detectarAnio_(sheet, info.grupos[g]);
       if (anioG !== anio) continue;
       found = true;
-      var row = grupos[g][mes];
-      var count = congelarFila_(sheet, row, lastCol);
+      var row = info.grupos[g][mes];
+      var count = congelarFila_(sheet, row, info.limiteCol);
       log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anio);
