@@ -13,26 +13,36 @@ function detectarGrupos_(sheet) {
                  'JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
   var lastRow = sheet.getLastRow();
   if (lastRow < 12) return [];
-  var colA = sheet.getRange('A1:A' + lastRow).getValues();
-  var rows = [];
-  for (var i = 0; i < colA.length; i++) {
-    var val = String(colA[i][0]).trim().toUpperCase();
-    if (nombres.indexOf(val) >= 0) rows.push(i + 1);
+  var mejorCol = -1, mejorCount = 0, mejorRows = [];
+  var maxCol = Math.min(sheet.getLastColumn(), 5);
+  for (var col = 1; col <= maxCol; col++) {
+    var vals = sheet.getRange(1, col, lastRow, 1).getValues();
+    var found = [];
+    for (var i = 0; i < vals.length; i++) {
+      var val = String(vals[i][0]).trim().toUpperCase();
+      if (nombres.indexOf(val) >= 0) found.push(i + 1);
+    }
+    if (found.length > mejorCount) {
+      mejorCount = found.length;
+      mejorRows = found;
+      mejorCol = col;
+    }
   }
+  if (mejorRows.length < 12) return [];
   var grupos = [], grupo = [];
-  for (var i = 0; i < rows.length; i++) {
-    if (grupo.length > 0 && rows[i] - grupo[grupo.length - 1] > 3) {
+  for (var i = 0; i < mejorRows.length; i++) {
+    if (grupo.length > 0 && mejorRows[i] - grupo[grupo.length - 1] > 3) {
       if (grupo.length === 12) grupos.push(grupo);
       grupo = [];
     }
-    grupo.push(rows[i]);
+    grupo.push(mejorRows[i]);
   }
   if (grupo.length === 12) grupos.push(grupo);
   return grupos;
 }
 
 function detectarAnio_(sheet, grupo) {
-  var startRow = Math.max(1, grupo[0] - 5);
+  var startRow = Math.max(1, grupo[0] - 10);
   var numRows = grupo[0] - startRow;
   if (numRows <= 0) return null;
   var lastCol = Math.min(sheet.getLastColumn(), 20);
