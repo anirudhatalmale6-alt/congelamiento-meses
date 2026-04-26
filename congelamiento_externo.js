@@ -7,49 +7,50 @@
 // ============================================
 
 var MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+var NOMBRES = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO',
+               'JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+
+function limpiarTexto_(txt) {
+  return txt.replace(/[  -​  　﻿]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+}
 
 function detectarGrupos_(sheet) {
-  var nombres = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO',
-                 'JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
   var lastRow = sheet.getLastRow();
-  if (lastRow < 12) return [];
-  var maxCol = Math.min(sheet.getLastColumn(), 10);
-  if (maxCol < 1) return [];
-  var mejorCol = -1, mejorCount = 0, mejorData = [];
-  for (var col = 1; col <= maxCol; col++) {
-    var vals = sheet.getRange(1, col, lastRow, 1).getDisplayValues();
-    var found = [];
-    for (var i = 0; i < vals.length; i++) {
-      var val = vals[i][0].trim().toUpperCase();
-      var idx = nombres.indexOf(val);
-      if (idx >= 0) found.push({row: i + 1, mes: idx});
-    }
-    if (found.length > mejorCount) {
-      mejorCount = found.length;
-      mejorData = found;
-      mejorCol = col;
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 12 || lastCol < 1) return [];
+  var scanCols = Math.min(lastCol, 15);
+  var allValues = sheet.getRange(1, 1, lastRow, scanCols).getDisplayValues();
+  var monthRows = [];
+  for (var r = 0; r < allValues.length; r++) {
+    for (var c = 0; c < allValues[r].length; c++) {
+      var val = limpiarTexto_(allValues[r][c]);
+      var idx = NOMBRES.indexOf(val);
+      if (idx >= 0) {
+        monthRows.push({row: r + 1, mes: idx});
+        break;
+      }
     }
   }
-  if (mejorData.length < 12) return [];
+  if (monthRows.length < 12) return [];
   var grupos = [];
   var used = {};
-  for (var i = 0; i < mejorData.length; i++) {
-    if (mejorData[i].mes !== 0 || used[i]) continue;
-    var grupo = [mejorData[i].row];
+  for (var i = 0; i < monthRows.length; i++) {
+    if (monthRows[i].mes !== 0 || used[i]) continue;
+    var grupo = [monthRows[i].row];
     var nextMes = 1;
-    for (var j = i + 1; j < mejorData.length && nextMes < 12; j++) {
+    for (var j = i + 1; j < monthRows.length && nextMes < 12; j++) {
       if (used[j]) continue;
-      if (mejorData[j].mes === nextMes) {
-        grupo.push(mejorData[j].row);
+      if (monthRows[j].mes === nextMes) {
+        grupo.push(monthRows[j].row);
         nextMes++;
-      } else if (mejorData[j].mes === 0) {
+      } else if (monthRows[j].mes === 0) {
         break;
       }
     }
     if (grupo.length === 12) {
       grupos.push(grupo);
-      for (var k = i; k < mejorData.length; k++) {
-        if (grupo.indexOf(mejorData[k].row) >= 0) used[k] = true;
+      for (var k = i; k < monthRows.length; k++) {
+        if (grupo.indexOf(monthRows[k].row) >= 0) used[k] = true;
       }
     }
   }
@@ -74,13 +75,13 @@ function detectarAnio_(sheet, grupo) {
 }
 
 function congelarFila_(sheet, row, lastCol) {
-  var range = sheet.getRange(row, 2, 1, lastCol - 1);
+  var range = sheet.getRange(row, 1, 1, lastCol);
   var values = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   var count = 0;
   for (var c = 0; c < values.length; c++) {
     if (formulas[c]) {
-      sheet.getRange(row, c + 2).setValue(values[c]);
+      sheet.getRange(row, c + 1).setValue(values[c]);
       count++;
     }
   }
@@ -111,7 +112,7 @@ function congelarMes() {
       found = true;
       var row = grupos[g][mesC];
       var count = congelarFila_(sheet, row, lastCol);
-      log.push('  Fila ' + row + ': ' + count + ' celdas congeladas');
+      log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anioC);
     log.push('');
@@ -141,7 +142,7 @@ function vistaPrevia() {
       var anio = detectarAnio_(sheet, grupos[g]);
       if (anio !== anioC) continue;
       var row = grupos[g][mesC];
-      var range = sheet.getRange(row, 2, 1, lastCol - 1);
+      var range = sheet.getRange(row, 1, 1, lastCol);
       var formulas = range.getFormulas()[0];
       var values = range.getValues()[0];
       var conFormula = 0, conValor = 0;
@@ -158,28 +159,54 @@ function vistaPrevia() {
 
 function diagnostico() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var nombres = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO',
-                 'JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
-  var log = ['DIAGNOSTICO - ' + ss.getName(), ''];
+  var log = ['DIAGNOSTICO COMPLETO - ' + ss.getName(), ''];
   var sheets = ss.getSheets();
   sheets.forEach(function(sheet) {
     var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
     if (lastRow < 5) return;
-    log.push('=== ' + sheet.getName() + ' (' + lastRow + ' filas, ' + sheet.getLastColumn() + ' col) ===');
-    var maxCol = Math.min(sheet.getLastColumn(), 10);
-    for (var col = 1; col <= maxCol; col++) {
-      var vals = sheet.getRange(1, col, lastRow, 1).getDisplayValues();
-      var count = 0, primera = 0;
-      for (var i = 0; i < vals.length; i++) {
-        var val = vals[i][0].trim().toUpperCase();
-        if (nombres.indexOf(val) >= 0) { count++; if (!primera) primera = i + 1; }
+    log.push('=== ' + sheet.getName() + ' (' + lastRow + ' filas, ' + lastCol + ' col) ===');
+    var scanCols = Math.min(lastCol, 15);
+    var allValues = sheet.getRange(1, 1, lastRow, scanCols).getDisplayValues();
+    var mesesPorCol = {};
+    var encontrados = [];
+    for (var r = 0; r < allValues.length; r++) {
+      for (var c = 0; c < allValues[r].length; c++) {
+        var val = limpiarTexto_(allValues[r][c]);
+        var idx = NOMBRES.indexOf(val);
+        if (idx >= 0) {
+          var colLetra = String.fromCharCode(65 + c);
+          if (!mesesPorCol[colLetra]) mesesPorCol[colLetra] = 0;
+          mesesPorCol[colLetra]++;
+          encontrados.push('  Fila ' + (r+1) + ' Col ' + colLetra + ': "' + allValues[r][c].trim() + '" = ' + NOMBRES[idx]);
+          break;
+        }
       }
-      if (count > 0) {
-        log.push('  Col ' + String.fromCharCode(64 + col) + ': ' + count + ' meses (1ra fila: ' + primera + ')');
+    }
+    if (encontrados.length === 0) {
+      log.push('  NINGÚN mes encontrado en ninguna celda');
+      var muestra = [];
+      for (var r = 0; r < Math.min(5, allValues.length); r++) {
+        var fila = [];
+        for (var c = 0; c < Math.min(3, allValues[r].length); c++) {
+          fila.push(allValues[r][c].substring(0, 20));
+        }
+        muestra.push('  Fila ' + (r+1) + ': [' + fila.join(' | ') + ']');
+      }
+      log.push('  Primeras filas:');
+      log = log.concat(muestra);
+    } else {
+      for (var col in mesesPorCol) {
+        log.push('  Columna ' + col + ': ' + mesesPorCol[col] + ' meses');
+      }
+      log.push('  Total encontrados: ' + encontrados.length);
+      log.push('  Primeros 5:');
+      for (var i = 0; i < Math.min(5, encontrados.length); i++) {
+        log.push(encontrados[i]);
       }
     }
     var grupos = detectarGrupos_(sheet);
-    log.push('  Bloques: ' + grupos.length);
+    log.push('  Bloques armados: ' + grupos.length);
     for (var g = 0; g < grupos.length; g++) {
       var anio = detectarAnio_(sheet, grupos[g]);
       log.push('    #' + (g+1) + ': filas ' + grupos[g][0] + '-' + grupos[g][11] + ' (anio: ' + (anio || '?') + ')');
@@ -213,7 +240,7 @@ function congelarMesEspecifico() {
       found = true;
       var row = grupos[g][mes];
       var count = congelarFila_(sheet, row, lastCol);
-      log.push('  Fila ' + row + ': ' + count + ' celdas congeladas');
+      log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anio);
   });
