@@ -194,6 +194,24 @@ function congelarCentral_(mesC, anioC, soloPrevia) {
   return log;
 }
 
+function detectarColsExcluidas_(sheet, grupo) {
+  var startRow = Math.max(1, grupo[0] - 10);
+  var numRows = grupo[0] - startRow;
+  if (numRows <= 0) return {};
+  var lastCol = Math.min(sheet.getLastColumn(), 40);
+  var values = sheet.getRange(startRow, 1, numRows, lastCol).getDisplayValues();
+  var excluidas = {};
+  for (var r = 0; r < values.length; r++) {
+    for (var c = 0; c < values[r].length; c++) {
+      var t = limpiarTexto_(values[r][c]);
+      if (t.indexOf('INV UNIF') >= 0 || t.indexOf('INVERSION UNIFICAD') >= 0) {
+        excluidas[c] = true;
+      }
+    }
+  }
+  return excluidas;
+}
+
 // ---- CONGELAMIENTO EXTERNO (abre planilla por ID) ----
 
 function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
@@ -211,12 +229,16 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
         if (anio !== anioC) continue;
         found = true;
         var row = info.grupos[g][mesC];
+        var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+        var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
+        if (exclCols.length > 0) log.push('    Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
         if (soloPrevia) {
           var range = sheet.getRange(row, 1, 1, info.limiteCol);
           var formulas = range.getFormulas()[0];
           var values = range.getValues()[0];
           var conFormula = 0, conValor = 0;
           for (var c = 0; c < values.length; c++) {
+            if (excl[c]) continue;
             if (formulas[c]) conFormula++;
             else if (values[c] !== '' && values[c] !== null && values[c] !== 0) conValor++;
           }
@@ -227,6 +249,7 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
           var formulas = range.getFormulas()[0];
           var count = 0;
           for (var c = 0; c < values.length; c++) {
+            if (excl[c]) continue;
             if (formulas[c]) {
               sheet.getRange(row, c + 1).setValue(values[c]);
               count++;

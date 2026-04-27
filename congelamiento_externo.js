@@ -101,12 +101,31 @@ function detectarAnio_(sheet, grupo) {
   return null;
 }
 
-function congelarFila_(sheet, row, limiteCol) {
+function detectarColsExcluidas_(sheet, grupo) {
+  var startRow = Math.max(1, grupo[0] - 10);
+  var numRows = grupo[0] - startRow;
+  if (numRows <= 0) return {};
+  var lastCol = Math.min(sheet.getLastColumn(), 40);
+  var values = sheet.getRange(startRow, 1, numRows, lastCol).getDisplayValues();
+  var excluidas = {};
+  for (var r = 0; r < values.length; r++) {
+    for (var c = 0; c < values[r].length; c++) {
+      var t = limpiarTexto_(values[r][c]);
+      if (t.indexOf('INV UNIF') >= 0 || t.indexOf('INVERSION UNIFICAD') >= 0) {
+        excluidas[c] = true;
+      }
+    }
+  }
+  return excluidas;
+}
+
+function congelarFila_(sheet, row, limiteCol, excluidas) {
   var range = sheet.getRange(row, 1, 1, limiteCol);
   var values = range.getValues()[0];
   var formulas = range.getFormulas()[0];
   var count = 0;
   for (var c = 0; c < values.length; c++) {
+    if (excluidas && excluidas[c]) continue;
     if (formulas[c]) {
       sheet.getRange(row, c + 1).setValue(values[c]);
       count++;
@@ -138,7 +157,10 @@ function congelarMes() {
       if (anio !== anioC) continue;
       found = true;
       var row = info.grupos[g][mesC];
-      var count = congelarFila_(sheet, row, info.limiteCol);
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
+      if (exclCols.length > 0) log.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
+      var count = congelarFila_(sheet, row, info.limiteCol, excl);
       log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anioC);
@@ -169,15 +191,19 @@ function vistaPrevia() {
       var anio = detectarAnio_(sheet, info.grupos[g]);
       if (anio !== anioC) continue;
       var row = info.grupos[g][mesC];
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
+      if (exclCols.length > 0) log.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
       var range = sheet.getRange(row, 1, 1, info.limiteCol);
       var formulas = range.getFormulas()[0];
       var values = range.getValues()[0];
       var conFormula = 0, conValor = 0;
       for (var c = 0; c < values.length; c++) {
+        if (excl[c]) continue;
         if (formulas[c]) conFormula++;
         else if (values[c] !== '' && values[c] !== null && values[c] !== 0) conValor++;
       }
-      log.push('  ' + MESES[mesC] + ' (fila ' + row + '): ' + conFormula + ' con formula, ' + conValor + ' con valor fijo');
+      log.push('  ' + MESES[mesC] + ' (fila ' + row + '): ' + conFormula + ' con formula, ' + conValor + ' con valor fijo (excluyendo INV UNIF)');
     }
     log.push('');
   });
@@ -246,7 +272,10 @@ function congelarMesEspecifico() {
       if (anioG !== anio) continue;
       found = true;
       var row = info.grupos[g][mes];
-      var count = congelarFila_(sheet, row, info.limiteCol);
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
+      if (exclCols.length > 0) log.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
+      var count = congelarFila_(sheet, row, info.limiteCol, excl);
       log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
     }
     if (!found) log.push('  Sin datos para ' + anio);
