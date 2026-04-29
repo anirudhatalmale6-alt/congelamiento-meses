@@ -197,13 +197,22 @@ function vistaPrevia() {
       var range = sheet.getRange(row, 1, 1, info.limiteCol);
       var formulas = range.getFormulas()[0];
       var values = range.getValues()[0];
+      var dispValues = range.getDisplayValues()[0];
       var conFormula = 0, conValor = 0;
+      var detalles = [];
       for (var c = 0; c < values.length; c++) {
         if (excl[c]) continue;
-        if (formulas[c]) conFormula++;
-        else if (values[c] !== '' && values[c] !== null && values[c] !== 0) conValor++;
+        var colL = String.fromCharCode(65 + c);
+        if (formulas[c]) {
+          conFormula++;
+          var dv = dispValues[c] || String(values[c]);
+          detalles.push(colL + '=' + dv + ' (formula)');
+        } else if (values[c] !== '' && values[c] !== null && values[c] !== 0) {
+          conValor++;
+        }
       }
-      log.push('  ' + MESES[mesC] + ' (fila ' + row + '): ' + conFormula + ' con formula, ' + conValor + ' con valor fijo (excluyendo INV UNIF)');
+      log.push('  ' + MESES[mesC] + ' (fila ' + row + '): ' + conFormula + ' con formula, ' + conValor + ' con valor fijo');
+      if (detalles.length > 0) log.push('  Valores a congelar: ' + detalles.join(' | '));
     }
     log.push('');
   });
