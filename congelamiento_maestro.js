@@ -151,6 +151,44 @@ function detectarAnio_(sheet, grupo) {
   return null;
 }
 
+// ---- CONGELAMIENTO COTIZACION DOLAR (DASHBOARD MARTIN col G) ----
+
+function congelarCotizacion_(mesC, anioC, soloPrevia) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('DASHBOARD MARTIN');
+  if (!sheet) return ['    No se encontro solapa DASHBOARD MARTIN'];
+  var log = [];
+  var lastRow = sheet.getLastRow();
+  var colC = sheet.getRange(1, 3, lastRow, 1).getDisplayValues();
+  var colG_formulas = sheet.getRange(1, 7, lastRow, 1).getFormulas();
+  var colG_values = sheet.getRange(1, 7, lastRow, 1).getValues();
+  var mesNombre = MESES[mesC].toLowerCase();
+  var inYear = false;
+  for (var r = 0; r < colC.length; r++) {
+    var cellText = String(colC[r][0]).trim().toLowerCase();
+    if (cellText.indexOf(String(anioC)) >= 0) { inYear = true; continue; }
+    if (inYear && cellText.indexOf(String(anioC + 1)) >= 0) break;
+    if (inYear && cellText === mesNombre) {
+      var formula = colG_formulas[r][0];
+      var value = colG_values[r][0];
+      var rowNum = r + 1;
+      if (soloPrevia) {
+        log.push('    G' + rowNum + ' (' + MESES[mesC] + '): ' + value + (formula ? ' (formula: ' + formula + ')' : ' (fijo)'));
+      } else {
+        if (formula) {
+          sheet.getRange(rowNum, 7).setValue(value);
+          log.push('    G' + rowNum + ' (' + MESES[mesC] + '): cotizacion congelada = $' + value);
+        } else {
+          log.push('    G' + rowNum + ' (' + MESES[mesC] + '): ya esta fijo = $' + value);
+        }
+      }
+      break;
+    }
+  }
+  if (log.length === 0) log.push('    No se encontro ' + MESES[mesC] + ' ' + anioC + ' en DASHBOARD MARTIN');
+  return log;
+}
+
 // ---- CONGELAMIENTO CENTRAL (TECNO / CREDITOS) ----
 
 function congelarCentral_(mesC, anioC, soloPrevia) {
@@ -360,6 +398,10 @@ function vistaPreviaTodo() {
   log = log.concat(congelarCentral_(mesC, anioC, true));
   log.push('');
 
+  log.push('=== COTIZACION DOLAR (DASHBOARD MARTIN) ===');
+  log = log.concat(congelarCotizacion_(mesC, anioC, true));
+  log.push('');
+
   log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
   log = log.concat(congelarTabsCentral_(mesC, anioC, true));
   log.push('');
@@ -390,6 +432,10 @@ function congelarTodo() {
     '=== PLANILLA CENTRAL (TECNO / CREDITOS) ==='];
 
   log = log.concat(congelarCentral_(mesC, anioC, false));
+  log.push('');
+
+  log.push('=== COTIZACION DOLAR (DASHBOARD MARTIN) ===');
+  log = log.concat(congelarCotizacion_(mesC, anioC, false));
   log.push('');
 
   log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
@@ -423,6 +469,10 @@ function congelarMesEspecificoTodo() {
   var log = ['CONGELAMIENTO: ' + MESES[mes] + ' ' + anio, '',
     '=== PLANILLA CENTRAL ==='];
   log = log.concat(congelarCentral_(mes, anio, false));
+  log.push('');
+
+  log.push('=== COTIZACION DOLAR (DASHBOARD MARTIN) ===');
+  log = log.concat(congelarCotizacion_(mes, anio, false));
   log.push('');
 
   log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
