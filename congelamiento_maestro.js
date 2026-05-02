@@ -212,6 +212,30 @@ function detectarColsExcluidas_(sheet, grupo) {
   return excluidas;
 }
 
+// ---- CONGELAMIENTO GENERICO DE FILA (con activacion de mes siguiente) ----
+
+function congelarFila_(sheet, row, limiteCol, excluidas, nextRow) {
+  var range = sheet.getRange(row, 1, 1, limiteCol);
+  var values = range.getValues()[0];
+  var formulas = range.getFormulas()[0];
+  var count = 0, activated = 0;
+  for (var c = 0; c < values.length; c++) {
+    if (excluidas && excluidas[c]) continue;
+    if (formulas[c]) {
+      if (nextRow && nextRow > 0) {
+        var nextCell = sheet.getRange(nextRow, c + 1);
+        if (!nextCell.getFormula()) {
+          sheet.getRange(row, c + 1).copyTo(nextCell, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+          activated++;
+        }
+      }
+      sheet.getRange(row, c + 1).setValue(values[c]);
+      count++;
+    }
+  }
+  return {frozen: count, activated: activated};
+}
+
 // ---- CONGELAMIENTO EXTERNO (abre planilla por ID) ----
 
 function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
@@ -253,18 +277,9 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
           log.push('    ' + sheet.getName() + ' fila ' + row + ': ' + conFormula + ' formulas, ' + conValor + ' fijos (hasta col ' + colLetra + ')');
           if (detalles.length > 0) log.push('    Valores a congelar: ' + detalles.join(' | '));
         } else {
-          var range = sheet.getRange(row, 1, 1, info.limiteCol);
-          var values = range.getValues()[0];
-          var formulas = range.getFormulas()[0];
-          var count = 0;
-          for (var c = 0; c < values.length; c++) {
-            if (excl[c]) continue;
-            if (formulas[c]) {
-              sheet.getRange(row, c + 1).setValue(values[c]);
-              count++;
-            }
-          }
-          log.push('    ' + sheet.getName() + ' fila ' + row + ': ' + count + ' formulas congeladas');
+          var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
+          var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
+          log.push('    ' + sheet.getName() + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
         }
       }
     });
@@ -272,6 +287,60 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
   } catch(e) {
     log.push('    ERROR: ' + e.message);
   }
+  return log;
+}
+
+// ---- CONGELAMIENTO TABS INDIVIDUALES EN PLANILLA CENTRAL ----
+// Escanea TODAS las solapas de la planilla central (excepto PANEL DE CONTROL)
+// y aplica congelamiento + activacion de mes siguiente usando deteccion automatica
+
+function congelarTabsCentral_(mesC, anioC, soloPrevia) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var log = [];
+  var sheets = ss.getSheets();
+  sheets.forEach(function(sheet) {
+    var nombre = sheet.getName();
+    if (nombre === CONFIG_CENTRAL.solapaDestino) return;
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
+    var colLetra = String.fromCharCode(65 + info.limiteCol - 1);
+    var found = false;
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
+      if (anio !== anioC) continue;
+      found = true;
+      var row = info.grupos[g][mesC];
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
+      if (exclCols.length > 0) log.push('    Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
+      if (soloPrevia) {
+        var range = sheet.getRange(row, 1, 1, info.limiteCol);
+        var formulas = range.getFormulas()[0];
+        var values = range.getValues()[0];
+        var dispValues = range.getDisplayValues()[0];
+        var conFormula = 0, conValor = 0;
+        var detalles = [];
+        for (var c = 0; c < values.length; c++) {
+          if (excl[c]) continue;
+          var colL = String.fromCharCode(65 + c);
+          if (formulas[c]) {
+            conFormula++;
+            var dv = dispValues[c] || String(values[c]);
+            detalles.push(colL + '=' + dv + ' (formula)');
+          } else if (values[c] !== '' && values[c] !== null && values[c] !== 0) {
+            conValor++;
+          }
+        }
+        log.push('    ' + nombre + ' fila ' + row + ': ' + conFormula + ' formulas, ' + conValor + ' fijos (hasta col ' + colLetra + ')');
+        if (detalles.length > 0) log.push('    Valores a congelar: ' + detalles.join(' | '));
+      } else {
+        var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
+        var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
+        log.push('    ' + nombre + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
+      }
+    }
+    if (!found && info.grupos.length > 0) log.push('    ' + nombre + ': sin datos para ' + anioC);
+  });
   return log;
 }
 
@@ -289,6 +358,10 @@ function vistaPreviaTodo() {
     '=== PLANILLA CENTRAL (TECNO / CREDITOS) ==='];
 
   log = log.concat(congelarCentral_(mesC, anioC, true));
+  log.push('');
+
+  log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
+  log = log.concat(congelarTabsCentral_(mesC, anioC, true));
   log.push('');
 
   EXTERNOS.forEach(function(ext) {
@@ -319,6 +392,10 @@ function congelarTodo() {
   log = log.concat(congelarCentral_(mesC, anioC, false));
   log.push('');
 
+  log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
+  log = log.concat(congelarTabsCentral_(mesC, anioC, false));
+  log.push('');
+
   EXTERNOS.forEach(function(ext) {
     log.push('=== ' + ext.nombre + ' (externo) ===');
     log = log.concat(congelarExterno_(ext, mesC, anioC, false));
@@ -346,6 +423,10 @@ function congelarMesEspecificoTodo() {
   var log = ['CONGELAMIENTO: ' + MESES[mes] + ' ' + anio, '',
     '=== PLANILLA CENTRAL ==='];
   log = log.concat(congelarCentral_(mes, anio, false));
+  log.push('');
+
+  log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
+  log = log.concat(congelarTabsCentral_(mes, anio, false));
   log.push('');
 
   EXTERNOS.forEach(function(ext) {

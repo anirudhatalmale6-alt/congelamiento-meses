@@ -119,19 +119,26 @@ function detectarColsExcluidas_(sheet, grupo) {
   return excluidas;
 }
 
-function congelarFila_(sheet, row, limiteCol, excluidas) {
+function congelarFila_(sheet, row, limiteCol, excluidas, nextRow) {
   var range = sheet.getRange(row, 1, 1, limiteCol);
   var values = range.getValues()[0];
   var formulas = range.getFormulas()[0];
-  var count = 0;
+  var count = 0, activated = 0;
   for (var c = 0; c < values.length; c++) {
     if (excluidas && excluidas[c]) continue;
     if (formulas[c]) {
+      if (nextRow && nextRow > 0) {
+        var nextCell = sheet.getRange(nextRow, c + 1);
+        if (!nextCell.getFormula()) {
+          sheet.getRange(row, c + 1).copyTo(nextCell, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+          activated++;
+        }
+      }
       sheet.getRange(row, c + 1).setValue(values[c]);
       count++;
     }
   }
-  return count;
+  return {frozen: count, activated: activated};
 }
 
 function congelarMes() {
@@ -157,11 +164,12 @@ function congelarMes() {
       if (anio !== anioC) continue;
       found = true;
       var row = info.grupos[g][mesC];
+      var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
       var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
       var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
       if (exclCols.length > 0) log.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
-      var count = congelarFila_(sheet, row, info.limiteCol, excl);
-      log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
+      var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
+      log.push('  Fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
     }
     if (!found) log.push('  Sin datos para ' + anioC);
     log.push('');
@@ -281,11 +289,12 @@ function congelarMesEspecifico() {
       if (anioG !== anio) continue;
       found = true;
       var row = info.grupos[g][mes];
+      var nextRow = (mes < 11) ? info.grupos[g][mes + 1] : 0;
       var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
       var exclCols = Object.keys(excl).map(function(c){return String.fromCharCode(65+parseInt(c));});
       if (exclCols.length > 0) log.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
-      var count = congelarFila_(sheet, row, info.limiteCol, excl);
-      log.push('  Fila ' + row + ': ' + count + ' formulas congeladas');
+      var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
+      log.push('  Fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
     }
     if (!found) log.push('  Sin datos para ' + anio);
   });
