@@ -3,6 +3,8 @@
 // ============================================
 // Script unico en la planilla central (PANEL DE CONTROL)
 // Congela TECNO y CREDITOS localmente + 7 vendedores externos
+// + cotizacion dolar + solapas individuales de la central
+// Auto-repara formulas del mes siguiente si faltan
 // ============================================
 
 // ---- CONFIGURACION CENTRAL (TECNO / CREDITOS) ----
@@ -31,7 +33,6 @@ var CONFIG_CENTRAL = {
 };
 
 // ---- CONFIGURACION EXTERNOS ----
-// IMPORTANTE: Reemplazar los IDs con los reales
 var EXTERNOS = [
   { nombre: 'TINO',         id: '1KBusYiaUuD4-rQ-JHTTv6kaH27xHyC4p6IFyRoScimM' },
   { nombre: 'OSITO S.R.L.', id: '1hrDYiUGbfwars04Wx_ZImVrrgLZKIzO6bDk-CxGeX-c' },
@@ -151,6 +152,110 @@ function detectarAnio_(sheet, grupo) {
   return null;
 }
 
+function detectarColsExcluidas_(sheet, grupo) {
+  var startRow = Math.max(1, grupo[0] - 10);
+  var numRows = grupo[0] - startRow;
+  if (numRows <= 0) return {};
+  var lastCol = Math.min(sheet.getLastColumn(), 40);
+  var values = sheet.getRange(startRow, 1, numRows, lastCol).getDisplayValues();
+  var excluidas = {};
+  for (var r = 0; r < values.length; r++) {
+    for (var c = 0; c < values[r].length; c++) {
+      var t = limpiarTexto_(values[r][c]);
+      if (t.indexOf('INV UNIF') >= 0 || t.indexOf('INVERSION UNIFICAD') >= 0) {
+        excluidas[c] = true;
+      }
+    }
+  }
+  return excluidas;
+}
+
+// ---- FUNCIONES DE AUTO-REPARACION ----
+
+// Busca en el grupo un mes que tenga formulas para usar como fuente
+function buscarFuenteFormulas_(sheet, limiteCol, excluidas, grupo, skipRows) {
+  for (var m = 0; m < grupo.length; m++) {
+    var candidateRow = grupo[m];
+    if (skipRows && skipRows[candidateRow]) continue;
+    var cFormulas = sheet.getRange(candidateRow, 1, 1, limiteCol).getFormulas()[0];
+    for (var c = 0; c < cFormulas.length; c++) {
+      if (excluidas && excluidas[c]) continue;
+      if (cFormulas[c]) return candidateRow;
+    }
+  }
+  return -1;
+}
+
+// Copia formulas de una fila fuente a una fila destino
+function copiarFormulas_(sheet, sourceRow, targetRow, limiteCol, excluidas) {
+  var srcFormulas = sheet.getRange(sourceRow, 1, 1, limiteCol).getFormulas()[0];
+  var copied = 0;
+  for (var c = 0; c < srcFormulas.length; c++) {
+    if (excluidas && excluidas[c]) continue;
+    if (srcFormulas[c]) {
+      sheet.getRange(sourceRow, c + 1).copyTo(
+        sheet.getRange(targetRow, c + 1),
+        SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false
+      );
+      copied++;
+    }
+  }
+  return copied;
+}
+
+// ---- CONGELAMIENTO GENERICO DE FILA (con auto-reparacion) ----
+
+function congelarFila_(sheet, row, limiteCol, excluidas, nextRow, grupo) {
+  var range = sheet.getRange(row, 1, 1, limiteCol);
+  var values = range.getValues()[0];
+  var formulas = range.getFormulas()[0];
+  var count = 0, activated = 0;
+
+  var hasFormulas = false;
+  for (var c = 0; c < formulas.length; c++) {
+    if (excluidas && excluidas[c]) continue;
+    if (formulas[c]) { hasFormulas = true; break; }
+  }
+
+  if (hasFormulas) {
+    // Caso normal: el mes tiene formulas, copiar al siguiente y congelar
+    for (var c = 0; c < values.length; c++) {
+      if (excluidas && excluidas[c]) continue;
+      if (formulas[c]) {
+        if (nextRow && nextRow > 0) {
+          var nextCell = sheet.getRange(nextRow, c + 1);
+          if (!nextCell.getFormula()) {
+            sheet.getRange(row, c + 1).copyTo(nextCell, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+            activated++;
+          }
+        }
+        sheet.getRange(row, c + 1).setValue(values[c]);
+        count++;
+      }
+    }
+  } else if (nextRow && nextRow > 0 && grupo) {
+    // Mes ya congelado. Auto-reparar: asegurar que el mes siguiente tenga formulas
+    var nextFormulas = sheet.getRange(nextRow, 1, 1, limiteCol).getFormulas()[0];
+    var nextHasFormulas = false;
+    for (var c2 = 0; c2 < nextFormulas.length; c2++) {
+      if (excluidas && excluidas[c2]) continue;
+      if (nextFormulas[c2]) { nextHasFormulas = true; break; }
+    }
+
+    if (!nextHasFormulas) {
+      var skip = {};
+      skip[row] = true;
+      skip[nextRow] = true;
+      var sourceRow = buscarFuenteFormulas_(sheet, limiteCol, excluidas, grupo, skip);
+      if (sourceRow >= 0) {
+        activated = copiarFormulas_(sheet, sourceRow, nextRow, limiteCol, excluidas);
+      }
+    }
+  }
+
+  return {frozen: count, activated: activated};
+}
+
 // ---- CONGELAMIENTO COTIZACION DOLAR (DASHBOARD MARTIN col G) ----
 
 function congelarCotizacion_(mesC, anioC, soloPrevia) {
@@ -217,7 +322,6 @@ function congelarCentral_(mesC, anioC, soloPrevia) {
       else log.push('    PESOS ya fijo: ' + col + fc);
       if (fD) { rD.setValue(vD); log.push('    DOLARES congelado: ' + col + (fc+1) + ' = ' + vD); }
       else log.push('    DOLARES ya fijo: ' + col + (fc+1));
-      // Actualizar mes siguiente con nueva formula
       var filasN = anioActual === 2026 ? vend.filas2026 : (anioActual === 2027 ? vend.filas2027 : null);
       if (filasN) {
         var fn = filasN[mesActual];
@@ -230,48 +334,6 @@ function congelarCentral_(mesC, anioC, soloPrevia) {
     }
   });
   return log;
-}
-
-function detectarColsExcluidas_(sheet, grupo) {
-  var startRow = Math.max(1, grupo[0] - 10);
-  var numRows = grupo[0] - startRow;
-  if (numRows <= 0) return {};
-  var lastCol = Math.min(sheet.getLastColumn(), 40);
-  var values = sheet.getRange(startRow, 1, numRows, lastCol).getDisplayValues();
-  var excluidas = {};
-  for (var r = 0; r < values.length; r++) {
-    for (var c = 0; c < values[r].length; c++) {
-      var t = limpiarTexto_(values[r][c]);
-      if (t.indexOf('INV UNIF') >= 0 || t.indexOf('INVERSION UNIFICAD') >= 0) {
-        excluidas[c] = true;
-      }
-    }
-  }
-  return excluidas;
-}
-
-// ---- CONGELAMIENTO GENERICO DE FILA (con activacion de mes siguiente) ----
-
-function congelarFila_(sheet, row, limiteCol, excluidas, nextRow) {
-  var range = sheet.getRange(row, 1, 1, limiteCol);
-  var values = range.getValues()[0];
-  var formulas = range.getFormulas()[0];
-  var count = 0, activated = 0;
-  for (var c = 0; c < values.length; c++) {
-    if (excluidas && excluidas[c]) continue;
-    if (formulas[c]) {
-      if (nextRow && nextRow > 0) {
-        var nextCell = sheet.getRange(nextRow, c + 1);
-        if (!nextCell.getFormula()) {
-          sheet.getRange(row, c + 1).copyTo(nextCell, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
-          activated++;
-        }
-      }
-      sheet.getRange(row, c + 1).setValue(values[c]);
-      count++;
-    }
-  }
-  return {frozen: count, activated: activated};
 }
 
 // ---- CONGELAMIENTO EXTERNO (abre planilla por ID) ----
@@ -314,10 +376,28 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
           }
           log.push('    ' + sheet.getName() + ' fila ' + row + ': ' + conFormula + ' formulas, ' + conValor + ' fijos (hasta col ' + colLetra + ')');
           if (detalles.length > 0) log.push('    Valores a congelar: ' + detalles.join(' | '));
+          // Mostrar estado del mes siguiente
+          var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
+          if (nextRow > 0) {
+            var nextFormulas = sheet.getRange(nextRow, 1, 1, info.limiteCol).getFormulas()[0];
+            var nextConFormula = 0;
+            for (var c2 = 0; c2 < nextFormulas.length; c2++) {
+              if (excl[c2]) continue;
+              if (nextFormulas[c2]) nextConFormula++;
+            }
+            if (nextConFormula === 0 && conFormula === 0) {
+              log.push('    >> ' + MESES[mesC + 1] + ' (fila ' + nextRow + '): SIN FORMULAS - se reparara automaticamente');
+            } else if (nextConFormula > 0) {
+              log.push('    >> ' + MESES[mesC + 1] + ' (fila ' + nextRow + '): ' + nextConFormula + ' formulas activas OK');
+            }
+          }
         } else {
           var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
-          var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
-          log.push('    ' + sheet.getName() + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
+          var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow, info.grupos[g]);
+          var msg = '    ' + sheet.getName() + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas';
+          if (result.activated > 0) msg += ', ' + result.activated + ' formulas activadas en fila ' + nextRow;
+          if (result.frozen === 0 && result.activated === 0) msg += ' (ya estaba congelado)';
+          log.push(msg);
         }
       }
     });
@@ -329,8 +409,6 @@ function congelarExterno_(extConfig, mesC, anioC, soloPrevia) {
 }
 
 // ---- CONGELAMIENTO TABS INDIVIDUALES EN PLANILLA CENTRAL ----
-// Escanea TODAS las solapas de la planilla central (excepto PANEL DE CONTROL)
-// y aplica congelamiento + activacion de mes siguiente usando deteccion automatica
 
 function congelarTabsCentral_(mesC, anioC, soloPrevia) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -339,6 +417,7 @@ function congelarTabsCentral_(mesC, anioC, soloPrevia) {
   sheets.forEach(function(sheet) {
     var nombre = sheet.getName();
     if (nombre === CONFIG_CENTRAL.solapaDestino) return;
+    if (nombre === 'DASHBOARD MARTIN') return;
     var info = analizarSheet_(sheet);
     if (info.grupos.length === 0) return;
     var colLetra = String.fromCharCode(65 + info.limiteCol - 1);
@@ -371,10 +450,27 @@ function congelarTabsCentral_(mesC, anioC, soloPrevia) {
         }
         log.push('    ' + nombre + ' fila ' + row + ': ' + conFormula + ' formulas, ' + conValor + ' fijos (hasta col ' + colLetra + ')');
         if (detalles.length > 0) log.push('    Valores a congelar: ' + detalles.join(' | '));
+        var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
+        if (nextRow > 0) {
+          var nextFormulas = sheet.getRange(nextRow, 1, 1, info.limiteCol).getFormulas()[0];
+          var nextConFormula = 0;
+          for (var c2 = 0; c2 < nextFormulas.length; c2++) {
+            if (excl[c2]) continue;
+            if (nextFormulas[c2]) nextConFormula++;
+          }
+          if (nextConFormula === 0 && conFormula === 0) {
+            log.push('    >> ' + MESES[mesC + 1] + ' (fila ' + nextRow + '): SIN FORMULAS - se reparara automaticamente');
+          } else if (nextConFormula > 0) {
+            log.push('    >> ' + MESES[mesC + 1] + ' (fila ' + nextRow + '): ' + nextConFormula + ' formulas activas OK');
+          }
+        }
       } else {
         var nextRow = (mesC < 11) ? info.grupos[g][mesC + 1] : 0;
-        var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow);
-        log.push('    ' + nombre + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas' + (result.activated > 0 ? ', ' + result.activated + ' formulas activadas en fila ' + nextRow : ''));
+        var result = congelarFila_(sheet, row, info.limiteCol, excl, nextRow, info.grupos[g]);
+        var msg = '    ' + nombre + ' fila ' + row + ': ' + result.frozen + ' formulas congeladas';
+        if (result.activated > 0) msg += ', ' + result.activated + ' formulas activadas en fila ' + nextRow;
+        if (result.frozen === 0 && result.activated === 0) msg += ' (ya estaba congelado)';
+        log.push(msg);
       }
     }
     if (!found && info.grupos.length > 0) log.push('    ' + nombre + ': sin datos para ' + anioC);
@@ -422,7 +518,7 @@ function congelarTodo() {
   if (mesC < 0) { mesC = 11; anioC--; }
 
   var resp = ui.alert('Confirmar Congelamiento',
-    'Se va a congelar ' + MESES[mesC] + ' ' + anioC + ' en TODAS las planillas.\n\nTECNO, CREDITOS + 7 vendedores externos.\n\nContinuar?',
+    'Se va a congelar ' + MESES[mesC] + ' ' + anioC + ' en TODAS las planillas.\n\nTECNO, CREDITOS + 7 vendedores externos.\n\nSi el mes ya fue congelado, se repararan automaticamente las formulas del mes siguiente.\n\nContinuar?',
     ui.ButtonSet.YES_NO);
   if (resp !== ui.Button.YES) return;
 
@@ -462,7 +558,7 @@ function congelarMesEspecificoTodo() {
   if (isNaN(mes) || mes < 0 || mes > 11 || isNaN(anio)) { ui.alert('Invalido'); return; }
 
   var confirm = ui.alert('Confirmar',
-    'Congelar ' + MESES[mes] + ' ' + anio + ' en TODAS las planillas?',
+    'Congelar ' + MESES[mes] + ' ' + anio + ' en TODAS las planillas?\n\nSi el mes ya fue congelado, se repararan automaticamente las formulas del mes siguiente.',
     ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
 
@@ -487,109 +583,6 @@ function congelarMesEspecificoTodo() {
   ui.alert('Congelamiento', log.join('\n'), ui.ButtonSet.OK);
 }
 
-// ---- REPARACION DE FORMULAS (activa mes actual en todas las planillas) ----
-
-function repararFila_(sheet, targetRow, limiteCol, excluidas, grupo) {
-  var targetRange = sheet.getRange(targetRow, 1, 1, limiteCol);
-  var targetFormulas = targetRange.getFormulas()[0];
-  var hasFormulas = false;
-  for (var c = 0; c < targetFormulas.length; c++) {
-    if (excluidas && excluidas[c]) continue;
-    if (targetFormulas[c]) { hasFormulas = true; break; }
-  }
-  if (hasFormulas) return {status: 'ok', copied: 0};
-
-  var sourceRow = -1, sourceMes = -1;
-  var mesActual = new Date().getMonth();
-  for (var m = mesActual + 1; m < 12; m++) {
-    var row = grupo[m];
-    var formulas = sheet.getRange(row, 1, 1, limiteCol).getFormulas()[0];
-    for (var c2 = 0; c2 < formulas.length; c2++) {
-      if (excluidas && excluidas[c2]) continue;
-      if (formulas[c2]) { sourceRow = row; sourceMes = m; break; }
-    }
-    if (sourceRow >= 0) break;
-  }
-  if (sourceRow < 0) {
-    for (var m2 = mesActual - 1; m2 >= 0; m2--) {
-      var row2 = grupo[m2];
-      var formulas2 = sheet.getRange(row2, 1, 1, limiteCol).getFormulas()[0];
-      for (var c3 = 0; c3 < formulas2.length; c3++) {
-        if (excluidas && excluidas[c3]) continue;
-        if (formulas2[c3]) { sourceRow = row2; sourceMes = m2; break; }
-      }
-      if (sourceRow >= 0) break;
-    }
-  }
-  if (sourceRow < 0) return {status: 'no_source', copied: 0};
-
-  var sourceFormulas = sheet.getRange(sourceRow, 1, 1, limiteCol).getFormulas()[0];
-  var copied = 0;
-  for (var c4 = 0; c4 < sourceFormulas.length; c4++) {
-    if (excluidas && excluidas[c4]) continue;
-    if (sourceFormulas[c4]) {
-      sheet.getRange(sourceRow, c4 + 1).copyTo(sheet.getRange(targetRow, c4 + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
-      copied++;
-    }
-  }
-  return {status: 'repaired', copied: copied, sourceMes: sourceMes, sourceRow: sourceRow};
-}
-
-function repararTodo() {
-  var now = new Date();
-  var mesActual = now.getMonth(), anioActual = now.getFullYear();
-
-  var log = ['REPARACION DE FORMULAS - GLOBAL',
-    'Fecha: ' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
-    'Reparando: ' + MESES[mesActual] + ' ' + anioActual, ''];
-
-  // 1) Central individual tabs
-  log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.getSheets().forEach(function(sheet) {
-    if (sheet.getName() === CONFIG_CENTRAL.solapaDestino) return;
-    var info = analizarSheet_(sheet);
-    if (info.grupos.length === 0) return;
-    for (var g = 0; g < info.grupos.length; g++) {
-      var anio = detectarAnio_(sheet, info.grupos[g]);
-      if (anio !== anioActual) continue;
-      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
-      var result = repararFila_(sheet, info.grupos[g][mesActual], info.limiteCol, excl, info.grupos[g]);
-      if (result.status === 'ok') log.push('  ' + sheet.getName() + ': ya tiene formulas');
-      else if (result.status === 'repaired') log.push('  ' + sheet.getName() + ': ' + result.copied + ' formulas copiadas desde ' + MESES[result.sourceMes]);
-      else log.push('  ' + sheet.getName() + ': SIN FUENTE para copiar formulas');
-    }
-  });
-  log.push('');
-
-  // 2) External vendors
-  EXTERNOS.forEach(function(ext) {
-    log.push('=== ' + ext.nombre + ' (externo) ===');
-    try {
-      var extSS = SpreadsheetApp.openById(ext.id);
-      extSS.getSheets().forEach(function(sheet) {
-        var info = analizarSheet_(sheet);
-        if (info.grupos.length === 0) return;
-        for (var g = 0; g < info.grupos.length; g++) {
-          var anio = detectarAnio_(sheet, info.grupos[g]);
-          if (anio !== anioActual) continue;
-          var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
-          var result = repararFila_(sheet, info.grupos[g][mesActual], info.limiteCol, excl, info.grupos[g]);
-          if (result.status === 'ok') log.push('  ' + sheet.getName() + ': ya tiene formulas');
-          else if (result.status === 'repaired') log.push('  ' + sheet.getName() + ': ' + result.copied + ' formulas copiadas desde ' + MESES[result.sourceMes]);
-          else log.push('  ' + sheet.getName() + ': SIN FUENTE para copiar formulas');
-        }
-      });
-    } catch(e) {
-      log.push('  ERROR: ' + e.message);
-    }
-  });
-
-  var msg = log.join('\n');
-  Logger.log(msg);
-  SpreadsheetApp.getUi().alert('Reparacion de Formulas', msg, SpreadsheetApp.getUi().ButtonSet.OK);
-}
-
 function configurarTriggerMensual() {
   ScriptApp.getProjectTriggers().forEach(function(t) { if (t.getHandlerFunction() === 'congelarTodo') ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('congelarTodo').timeBased().onMonthDay(1).atHour(5).create();
@@ -599,8 +592,6 @@ function configurarTriggerMensual() {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Congelamiento')
     .addItem('Vista Previa GLOBAL (sin cambios)', 'vistaPreviaTodo')
-    .addSeparator()
-    .addItem('Reparar Formulas Mes Actual - GLOBAL', 'repararTodo')
     .addSeparator()
     .addItem('Congelar Mes Anterior - TODO', 'congelarTodo')
     .addItem('Congelar Mes Especifico - TODO...', 'congelarMesEspecificoTodo')
