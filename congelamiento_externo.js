@@ -141,6 +141,117 @@ function congelarFila_(sheet, row, limiteCol, excluidas, nextRow) {
   return {frozen: count, activated: activated};
 }
 
+function repararFormulas() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var now = new Date();
+  var mesActual = now.getMonth(); // 0-based: May = 4
+  var anioActual = now.getFullYear();
+  var log = ['REPARACION DE FORMULAS - MES ACTUAL',
+    'Fecha: ' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
+    'Reparando: ' + MESES[mesActual] + ' ' + anioActual,
+    'Planilla: ' + ss.getName(), ''];
+
+  var totalReparadas = 0;
+  var sheets = ss.getSheets();
+  sheets.forEach(function(sheet) {
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
+    var sheetLog = [];
+    var sheetTouched = false;
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
+      if (anio !== anioActual) continue;
+      var targetRow = info.grupos[g][mesActual];
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var exclCols = Object.keys(excl).map(function(c) { return String.fromCharCode(65 + parseInt(c)); });
+      if (exclCols.length > 0) sheetLog.push('  Columnas excluidas (INV UNIF): ' + exclCols.join(', '));
+
+      // Check if target row already has formulas
+      var targetRange = sheet.getRange(targetRow, 1, 1, info.limiteCol);
+      var targetFormulas = targetRange.getFormulas()[0];
+      var hasFormulas = false;
+      for (var c = 0; c < targetFormulas.length; c++) {
+        if (excl[c]) continue;
+        if (targetFormulas[c]) { hasFormulas = true; break; }
+      }
+
+      if (hasFormulas) {
+        sheetLog.push('  ' + MESES[mesActual] + ' (fila ' + targetRow + '): YA tiene formulas, no necesita reparacion');
+        continue;
+      }
+
+      // Search for a source month that HAS formulas
+      // Try months after current first (Jun, Jul, Aug...), then earlier months (Apr, Mar, Feb...)
+      var sourceRow = -1;
+      var sourceMes = -1;
+      // Forward: mesActual+1 to 11
+      for (var m = mesActual + 1; m < 12; m++) {
+        var candidateRow = info.grupos[g][m];
+        var candidateRange = sheet.getRange(candidateRow, 1, 1, info.limiteCol);
+        var candidateFormulas = candidateRange.getFormulas()[0];
+        var candidateHas = false;
+        for (var c2 = 0; c2 < candidateFormulas.length; c2++) {
+          if (excl[c2]) continue;
+          if (candidateFormulas[c2]) { candidateHas = true; break; }
+        }
+        if (candidateHas) {
+          sourceRow = candidateRow;
+          sourceMes = m;
+          break;
+        }
+      }
+      // If not found forward, try backward: mesActual-1 to 0
+      if (sourceRow < 0) {
+        for (var m2 = mesActual - 1; m2 >= 0; m2--) {
+          var candidateRow2 = info.grupos[g][m2];
+          var candidateRange2 = sheet.getRange(candidateRow2, 1, 1, info.limiteCol);
+          var candidateFormulas2 = candidateRange2.getFormulas()[0];
+          var candidateHas2 = false;
+          for (var c3 = 0; c3 < candidateFormulas2.length; c3++) {
+            if (excl[c3]) continue;
+            if (candidateFormulas2[c3]) { candidateHas2 = true; break; }
+          }
+          if (candidateHas2) {
+            sourceRow = candidateRow2;
+            sourceMes = m2;
+            break;
+          }
+        }
+      }
+
+      if (sourceRow < 0) {
+        sheetLog.push('  ' + MESES[mesActual] + ' (fila ' + targetRow + '): SIN FORMULAS y no se encontro mes fuente para copiar');
+        continue;
+      }
+
+      // Copy formulas from source to target
+      var sourceRange = sheet.getRange(sourceRow, 1, 1, info.limiteCol);
+      var sourceFormulas = sourceRange.getFormulas()[0];
+      var copied = 0;
+      for (var c4 = 0; c4 < sourceFormulas.length; c4++) {
+        if (excl[c4]) continue;
+        if (sourceFormulas[c4]) {
+          var targetCell = sheet.getRange(targetRow, c4 + 1);
+          sheet.getRange(sourceRow, c4 + 1).copyTo(targetCell, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+          copied++;
+        }
+      }
+      totalReparadas += copied;
+      sheetTouched = true;
+      sheetLog.push('  ' + MESES[mesActual] + ' (fila ' + targetRow + '): ' + copied + ' formulas copiadas desde ' + MESES[sourceMes] + ' (fila ' + sourceRow + ')');
+    }
+    if (sheetLog.length > 0) {
+      log.push('=== Solapa: ' + sheet.getName() + ' ===');
+      log = log.concat(sheetLog);
+      log.push('');
+    }
+  });
+
+  log.push('TOTAL: ' + totalReparadas + ' formulas reparadas');
+  var msg = log.join('\n'); Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Reparacion de Formulas', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch(e) {}
+}
+
 function congelarMes() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var now = new Date();
@@ -311,6 +422,8 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('Congelamiento')
     .addItem('Vista Previa (sin cambios)', 'vistaPrevia')
     .addItem('Diagnostico', 'diagnostico')
+    .addSeparator()
+    .addItem('Reparar Formulas Mes Actual', 'repararFormulas')
     .addSeparator()
     .addItem('Congelar Mes Anterior', 'congelarMes')
     .addItem('Congelar Mes Especifico...', 'congelarMesEspecifico')

@@ -437,6 +437,109 @@ function congelarMesEspecificoTodo() {
   ui.alert('Congelamiento', log.join('\n'), ui.ButtonSet.OK);
 }
 
+// ---- REPARACION DE FORMULAS (activa mes actual en todas las planillas) ----
+
+function repararFila_(sheet, targetRow, limiteCol, excluidas, grupo) {
+  var targetRange = sheet.getRange(targetRow, 1, 1, limiteCol);
+  var targetFormulas = targetRange.getFormulas()[0];
+  var hasFormulas = false;
+  for (var c = 0; c < targetFormulas.length; c++) {
+    if (excluidas && excluidas[c]) continue;
+    if (targetFormulas[c]) { hasFormulas = true; break; }
+  }
+  if (hasFormulas) return {status: 'ok', copied: 0};
+
+  var sourceRow = -1, sourceMes = -1;
+  var mesActual = new Date().getMonth();
+  for (var m = mesActual + 1; m < 12; m++) {
+    var row = grupo[m];
+    var formulas = sheet.getRange(row, 1, 1, limiteCol).getFormulas()[0];
+    for (var c2 = 0; c2 < formulas.length; c2++) {
+      if (excluidas && excluidas[c2]) continue;
+      if (formulas[c2]) { sourceRow = row; sourceMes = m; break; }
+    }
+    if (sourceRow >= 0) break;
+  }
+  if (sourceRow < 0) {
+    for (var m2 = mesActual - 1; m2 >= 0; m2--) {
+      var row2 = grupo[m2];
+      var formulas2 = sheet.getRange(row2, 1, 1, limiteCol).getFormulas()[0];
+      for (var c3 = 0; c3 < formulas2.length; c3++) {
+        if (excluidas && excluidas[c3]) continue;
+        if (formulas2[c3]) { sourceRow = row2; sourceMes = m2; break; }
+      }
+      if (sourceRow >= 0) break;
+    }
+  }
+  if (sourceRow < 0) return {status: 'no_source', copied: 0};
+
+  var sourceFormulas = sheet.getRange(sourceRow, 1, 1, limiteCol).getFormulas()[0];
+  var copied = 0;
+  for (var c4 = 0; c4 < sourceFormulas.length; c4++) {
+    if (excluidas && excluidas[c4]) continue;
+    if (sourceFormulas[c4]) {
+      sheet.getRange(sourceRow, c4 + 1).copyTo(sheet.getRange(targetRow, c4 + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+      copied++;
+    }
+  }
+  return {status: 'repaired', copied: copied, sourceMes: sourceMes, sourceRow: sourceRow};
+}
+
+function repararTodo() {
+  var now = new Date();
+  var mesActual = now.getMonth(), anioActual = now.getFullYear();
+
+  var log = ['REPARACION DE FORMULAS - GLOBAL',
+    'Fecha: ' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
+    'Reparando: ' + MESES[mesActual] + ' ' + anioActual, ''];
+
+  // 1) Central individual tabs
+  log.push('=== SOLAPAS INDIVIDUALES CENTRAL ===');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(function(sheet) {
+    if (sheet.getName() === CONFIG_CENTRAL.solapaDestino) return;
+    var info = analizarSheet_(sheet);
+    if (info.grupos.length === 0) return;
+    for (var g = 0; g < info.grupos.length; g++) {
+      var anio = detectarAnio_(sheet, info.grupos[g]);
+      if (anio !== anioActual) continue;
+      var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+      var result = repararFila_(sheet, info.grupos[g][mesActual], info.limiteCol, excl, info.grupos[g]);
+      if (result.status === 'ok') log.push('  ' + sheet.getName() + ': ya tiene formulas');
+      else if (result.status === 'repaired') log.push('  ' + sheet.getName() + ': ' + result.copied + ' formulas copiadas desde ' + MESES[result.sourceMes]);
+      else log.push('  ' + sheet.getName() + ': SIN FUENTE para copiar formulas');
+    }
+  });
+  log.push('');
+
+  // 2) External vendors
+  EXTERNOS.forEach(function(ext) {
+    log.push('=== ' + ext.nombre + ' (externo) ===');
+    try {
+      var extSS = SpreadsheetApp.openById(ext.id);
+      extSS.getSheets().forEach(function(sheet) {
+        var info = analizarSheet_(sheet);
+        if (info.grupos.length === 0) return;
+        for (var g = 0; g < info.grupos.length; g++) {
+          var anio = detectarAnio_(sheet, info.grupos[g]);
+          if (anio !== anioActual) continue;
+          var excl = detectarColsExcluidas_(sheet, info.grupos[g]);
+          var result = repararFila_(sheet, info.grupos[g][mesActual], info.limiteCol, excl, info.grupos[g]);
+          if (result.status === 'ok') log.push('  ' + sheet.getName() + ': ya tiene formulas');
+          else if (result.status === 'repaired') log.push('  ' + sheet.getName() + ': ' + result.copied + ' formulas copiadas desde ' + MESES[result.sourceMes]);
+          else log.push('  ' + sheet.getName() + ': SIN FUENTE para copiar formulas');
+        }
+      });
+    } catch(e) {
+      log.push('  ERROR: ' + e.message);
+    }
+  });
+
+  var msg = log.join('\n');
+  Logger.log(msg);
+  SpreadsheetApp.getUi().alert('Reparacion de Formulas', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
 function configurarTriggerMensual() {
   ScriptApp.getProjectTriggers().forEach(function(t) { if (t.getHandlerFunction() === 'congelarTodo') ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('congelarTodo').timeBased().onMonthDay(1).atHour(5).create();
@@ -446,6 +549,8 @@ function configurarTriggerMensual() {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Congelamiento')
     .addItem('Vista Previa GLOBAL (sin cambios)', 'vistaPreviaTodo')
+    .addSeparator()
+    .addItem('Reparar Formulas Mes Actual - GLOBAL', 'repararTodo')
     .addSeparator()
     .addItem('Congelar Mes Anterior - TODO', 'congelarTodo')
     .addItem('Congelar Mes Especifico - TODO...', 'congelarMesEspecificoTodo')
